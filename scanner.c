@@ -17,6 +17,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 
 #include "ipleech.h"
 
@@ -48,12 +49,6 @@ static bool post_event(const struct host_leech * const event) {
 }
 
 static void run_scanner(struct host_leech * const poll[], const int size) {
-    extern int g_timeout;
-    fd_set fds;
-    struct timeval timeout = { .tv_sec = g_timeout, .tv_usec = 0 };
-    int maxfd = 0;
-
-    FD_ZERO(&fds);
 
     for (int i = 0; i <= size; ++i) {
         struct host_leech * const p = poll[i];
@@ -78,27 +73,54 @@ static void run_scanner(struct host_leech * const poll[], const int size) {
         if (conn_status == -1 && errno != EINPROGRESS) {
             continue;
         }
-
-        if (p->fd > maxfd) {
-            maxfd += p->fd;
-        }
-
-        FD_SET(p->fd, &fds);
-
     }
 
-    select(maxfd + 1, NULL, &fds, NULL, &timeout);
+    int scan_restart = 0;
+    extern int g_timeout;
+    const time_t start_time = time(NULL);
+
+    while (scan_restart < MAX_EVENTS) {
+        struct timeval timeout = { .tv_sec = g_timeout, .tv_usec = 0 };
+        fd_set fds;
+        int maxfd = 0;
+
+        FD_ZERO(&fds);
+
+        for (int i = 0; i <= size; ++i) {
+            struct host_leech * const p = poll[i];
+
+            if (p->status == true) {
+                continue;
+            }
+
+            if (p->fd > maxfd) {
+                maxfd += p->fd;
+            }
+
+            FD_SET(p->fd, &fds);
+        }
+
+
+        select(maxfd + 1, NULL, &fds, NULL, &timeout);
+
+        for (int i = 0; i <= size; ++i) {
+            struct host_leech * const p = poll[i];
+
+            if (FD_ISSET(p->fd, &fds)) {
+                p->status = true;
+                scan_restart++;
+            }
+        }
+
+        if ((time(NULL) - start_time) >= g_timeout) {
+            scan_restart = MAX_EVENTS;
+        }
+    }
 
     for (int i = 0; i <= size; ++i) {
         struct host_leech * const p = poll[i];
-
-        if (FD_ISSET(p->fd, &fds)) {
-            p->status = true;
-        }
-
         close(p->fd);
     }
-
 }
 
 void proceed_host_leech_events() {
